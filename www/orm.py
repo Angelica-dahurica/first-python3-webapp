@@ -1,18 +1,19 @@
 # -*- coding: utf-8 -*-
+# object relational mapping
 
 import asyncio
 import logging
 import aiomysql
 
 
-def log(sql, args=()):
+def log(sql):
 	logging.info('SQL: %s' % sql)
 
 
 # 创建连接池
 @asyncio.coroutine
 def create_pool(loop, **kw):
-	logging.info('create database connection pool...')
+	logging.info('-create database connection pool...')
 	global __pool  # 创建一个全局的连接池，每个HTTP请求都可以从连接池中直接获取数据库连接
 	__pool = yield from aiomysql.create_pool(
 		host=kw.get('host', 'localhost'),
@@ -31,7 +32,7 @@ def create_pool(loop, **kw):
 # SELECT
 @asyncio.coroutine
 def select(sql, args, size=None):
-	log(sql, args)
+	log(sql)
 	global __pool
 	with (yield from __pool) as conn:
 		cur = yield from conn.cursor(aiomysql.DictCursor)
@@ -41,13 +42,15 @@ def select(sql, args, size=None):
 		else:
 			rs = yield from cur.fetchall()
 		yield from cur.close()
+		# with 语句适用于对资源进行访问的场合，确保不管使用过程中是否发生异常都会执行必要的“清理”操作，
+		# 释放资源，比如文件使用后自动关闭、线程中锁的自动获取和释放等。
 		logging.info('rows returned:%s' % len(rs))
 		return rs
 
 
 # INSERT, UPDATE, DELETE
 def execute(sql, args):
-	log(sql, args)
+	log(sql)
 	with(yield from __pool) as conn:
 		try:
 			cur = yield from conn.cursor()
@@ -79,69 +82,70 @@ class Field(object):
 
 class StringField(Field):
 	def __init__(self, name=None, primary_key=False, default=None, ddl='varchar(100)'):
-		super.__init__(name, ddl, primary_key, default)
+		super().__init__(name, ddl, primary_key, default)
 
 
 class IntegerField(Field):
 	def __init__(self, name=None, primary_key=False, default=0):
-		super.__init__(name, 'bigint', primary_key, default)
+		super().__init__(name, 'bigint', primary_key, default)
 
 
 class BooleanField(Field):
 	def __init__(self, name=None, default=False):
-		super.__init__(name, 'boolean', False, default)
+		super().__init__(name, 'boolean', False, default)
 
 
 class FloatField(Field):
 	def __init__(self, name=None, primary_key=False, default=0.0):
-		super.__init__(name, 'real', primary_key, default)
+		super().__init__(name, 'real', primary_key, default)
 
 
 class TextField(Field):
 	def __init__(self, name=None, default=None):
-		super.__init__(name, 'text', False, default)
+		super().__init__(name, 'text', False, default)
 
 
-class ModelMetaclass(type):
-	def __new__(cls, name, bases, attrs):
+class ModelMetaclass(type):  # metaclass是创建类，所以必须从`type`类型派生：
+	def __new__(mcs, name, bases, attrs):
 		# 排除Model类本身
-		if name=='Model':
-			return type.__new__(cls, name, bases, attrs)
+		if name == 'Model':
+			return type.__new__(mcs, name, bases, attrs)
 
 		# 获取table名称
-		tableName = attrs.get('__table__', None) or name
-		logging.info('found model %s (table: %s)' % (name, tableName))
+		table_name = attrs.get('__table__', None) or name
+
+		logging.info('found model %s (table: %s)' % (name, table_name))
 
 		# 获取所有的Field和主键名
 		mappings = dict()
 		fields = []
-		primaryKey = None
+		primary_key = None
 		for k, v in attrs.items():
 			if isinstance(v, Field):
-				logging.info('  found mapping: %s ==> %s' % (k , v))
+				logging.info('  found mapping: %s ==> %s' % (k, v))
 				mappings[k] = v
 				if v.primary_key:
 					# 找到主键
-					if primaryKey:
+					if primary_key:
 						raise RuntimeError('Duplicate primary key for field: &s' % k)
-					primaryKey = k
+					primary_key = k
 				else:
 					fields.append(k)
-		if not primaryKey:
+		if not primary_key:
 			raise RuntimeError('Primary key not found.')
 		for k in mappings.keys():
 			attrs.pop(k)
 		escaped_fields = list(map(lambda f: '`%s`' % f, fields))
 		attrs['__mappings__'] = mappings  # 保存属性和列的映射关系
-		attrs['__tables__'] = tableName
-		attrs['__primary_key__'] = primaryKey  # 主键属性名
+		attrs['__tables__'] = table_name
+		attrs['__primary_key__'] = primary_key  # 主键属性名
 		attrs['__fields__'] = fields  # 除主键外的属性名
 		# 构造默认的SELECT, INSERT, UPDATE & DELETE语句
-		attrs['__select__'] = 'select `%s`, %s from `%s`' % (primaryKey, ','.join(escaped_fields), tableName)
-		attrs['__insert__'] = 'insert into `%s` (%s, `%s`) values (%s)' % (tableName, ','.join(escaped_fields), primaryKey, create_args_string(len(escaped_fields) + 1))
-		attrs['__update__'] = 'update `%s` set %s where `%s`=?' % (tableName, ','.join(map(lambda  f : '`%s`=?' % (mappings.get(f).name or f), fields)), primaryKey)
-		attrs['__delete__'] = 'delete form `%s` where `%s`=?' % (tableName, primaryKey)
-		return type.__new__(cls, name, bases, attrs)
+		attrs['__select__'] = 'select `%s`, %s from `%s`' % (primary_key, ','.join(escaped_fields), table_name)
+		attrs['__insert__'] = 'insert into `%s` (%s, `%s`) values (%s)' % (table_name, ','.join(escaped_fields), primary_key, create_args_string(len(escaped_fields) + 1))
+		attrs['__update__'] = 'update `%s` set %s where `%s`=?' % (table_name, ','.join(map(lambda f : '`%s`=?' % (mappings.get(f).name or f), fields)), primary_key)
+		attrs['__delete__'] = 'delete form `%s` where `%s`=?' % (table_name, primary_key)
+		return type.__new__(mcs, name, bases, attrs)
 
 
 class Model(dict, metaclass=ModelMetaclass):
@@ -216,10 +220,11 @@ class Model(dict, metaclass=ModelMetaclass):
 			return None
 		return rs[0]['_num_']
 
-	async def save(self):
+	@asyncio.coroutine
+	def save(self):
 		args = list(map(self.getValueOrDefault, self.__fields__))
 		args.append(self.getValueOrDefault(self.__primary_key__))
-		rows = await execute(self.__insert__, args)
+		rows = yield from execute(self.__insert__, args)
 		if rows != 1:
 			logging.warning('failed to insert record: affected rows %s' % rows)
 
