@@ -6,6 +6,7 @@ from aiohttp import web
 from jinja2 import Environment, FileSystemLoader
 from www.coroweb import add_routes, add_static
 from datetime import datetime
+from www import orm
 import os
 import json
 import time
@@ -13,23 +14,23 @@ import time
 logging.basicConfig(level=logging.INFO)
 
 
-def index(request):
-	return web.Response(body=b'<h1>Awesome<h1>', content_type='text/html')
+# def index(request):
+# 	return web.Response(body=b'<h1>Awesome<h1>', content_type='text/html')
 
 
 def init_jinja2(app, **kw):
 	logging.info('init jinja2...')
 	options = dict(
-		autoescape = kw.get('autoescape', True),
-		block_start_string = kw.get('block_start_string', '{%'),
-		block_end_string = kw.get('block_end_string', '}%'),
-		variable_start_string = kw.get('variable_start_string', '{{'),
-		variable_end_string = kw.get('variable_end_string', '}}'),
-		auto_reload = kw.get('auto_reload', True)
+		autoescape=kw.get('autoescape', True),
+		block_start_string=kw.get('block_start_string', '{%'),
+		block_end_string=kw.get('block_end_string', '%}'),
+		variable_start_string=kw.get('variable_start_string', '{{'),
+		variable_end_string=kw.get('variable_end_string', '}}'),
+		auto_reload=kw.get('auto_reload', True)
 	)
 	path = kw.get('path', None)
 	if path is None:
-		path = os.path.join((os.path.dirname(os.path.abspath(__file__)), 'templates'))
+		path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
 	logging.info('set jinja2 template path: %s' % path)
 	env = Environment(loader=FileSystemLoader(path), **options)
 	filters = kw.get('filters', None)
@@ -56,7 +57,7 @@ async def data_factory(app, handler):
 			if request.content_type.startswith('application/json'):
 				request.__data__ = await request.json()
 				logging.info('request json: %s' % str(request.__data__))
-			elif request.content_type.startswith('application/x-www-form-urlemcoded'):
+			elif request.content_type.startswith('application/x-www-form-urlencoded'):
 				request.__data__ = await request.post()
 				logging.info('request form: %s' % str(request.__data__))
 		return await handler(request)
@@ -90,7 +91,7 @@ async def response_factory(app, handler):
 				resp = web.Response(body=app['__templating__'].get_template(template).render(**r).encode('utf-8'))
 				resp.content_type = 'text/html;charset=utf-8'
 				return resp
-		if isinstance(r, int) and 600 < r >= 100:
+		if isinstance(r, int) and 600 > r >= 100:
 			return web.Response(r)
 		if isinstance(r, tuple) and len(r) == 2:
 			t, m = r
@@ -98,7 +99,7 @@ async def response_factory(app, handler):
 				return web.Response(t, str(m))
 		# default:
 		resp = web.Response(body=str(r).encode('utf-8'))
-		resp.content_type = 'text/html;charset=utf-8'
+		resp.content_type = 'text/plain;charset=utf-8'
 		return resp
 	return response
 
@@ -120,15 +121,15 @@ def datetime_filter(t):
 # 生成器generator - 边循环边计算的机制；包含yield关键字的函数
 # 变成generator的函数，在每次调用next()的时候执行，遇到yield语句返回，再次执行时从上次返回的yield语句处继续执行
 # 协程coroutine
-@asyncio.coroutine  # 把一个generator标记为coroutine类型
-def init(loop):
+async def init(loop):
+	await orm.create_pool(loop=loop, host='127.0.0.1', port=3306, user='www-data',password='www-data', db='awesome')
 	app = web.Application(loop=loop, middlewares=[
 		logger_factory, response_factory
 	])
 	init_jinja2(app, filters=dict(datetime=datetime_filter))
 	add_routes(app, 'handlers')
 	add_static(app)
-	srv = yield from loop.create_server(app.make_handler(), '127.0.0.1', 9000)  # 创建一个TCP服务器
+	srv = await loop.create_server(app.make_handler(), '127.0.0.1', 9000)  # 创建一个TCP服务器
 	logging.info('server started at http://127.0.0.1:9000...')
 	return srv
 

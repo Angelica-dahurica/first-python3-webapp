@@ -30,21 +30,19 @@ def create_pool(loop, **kw):
 
 
 # SELECT
-@asyncio.coroutine
-def select(sql, args, size=None):
+async def select(sql, args, size=None):
 	log(sql)
 	global __pool
-	with (yield from __pool) as conn:
-		cur = yield from conn.cursor(aiomysql.DictCursor)
-		yield from cur.execute(sql.replace('?', '%s'), args or ())  # SQL语句的占位符是?，而MySQL的占位符是%s
-		if size:
-			rs = yield from cur.fetchmany(size)
-		else:
-			rs = yield from cur.fetchall()
-		yield from cur.close()
+	async with __pool.get() as conn:
+		async with conn.cursor(aiomysql.DictCursor) as cur:
+			await cur.execute(sql.replace('?', '%s'), args or ())  # SQL语句的占位符是?，而MySQL的占位符是%s
+			if size:
+				rs = await cur.fetchmany(size)
+			else:
+				rs = await cur.fetchall()
+		logging.info('rows returned: %s' % len(rs))
 		# with 语句适用于对资源进行访问的场合，确保不管使用过程中是否发生异常都会执行必要的“清理”操作，
 		# 释放资源，比如文件使用后自动关闭、线程中锁的自动获取和释放等。
-		logging.info('rows returned:%s' % len(rs))
 		return rs
 
 
@@ -122,7 +120,7 @@ class ModelMetaclass(type):  # metaclass是创建类，所以必须从`type`类�
 		primary_key = None
 		for k, v in attrs.items():
 			if isinstance(v, Field):
-				logging.info('  found mapping: %s ==> %s' % (k, v))
+				logging.info('found mapping: %s ==> %s' % (k, v))
 				mappings[k] = v
 				if v.primary_key:
 					# 找到主键
@@ -200,7 +198,7 @@ class Model(dict, metaclass=ModelMetaclass):
 			if isinstance(limit, int):
 				sql.append('?')
 				args.append(limit)
-			elif isinstance(limit, tuple) and len(limit)==2:
+			elif isinstance(limit, tuple) and len(limit) == 2:
 				sql.append('?,?')
 				args.extend(limit)
 			else:
