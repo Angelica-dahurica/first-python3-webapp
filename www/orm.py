@@ -6,16 +6,15 @@ import logging
 import aiomysql
 
 
-def log(sql):
+def log(sql, args=()):
 	logging.info('SQL: %s' % sql)
 
 
 # 创建连接池
-@asyncio.coroutine
-def create_pool(loop, **kw):
+async def create_pool(loop, **kw):
 	logging.info('-create database connection pool...')
 	global __pool  # 创建一个全局的连接池，每个HTTP请求都可以从连接池中直接获取数据库连接
-	__pool = yield from aiomysql.create_pool(
+	__pool = await aiomysql.create_pool(
 		host=kw.get('host', 'localhost'),
 		port=kw.get('port', 3306),
 		user=kw['user'],
@@ -47,15 +46,20 @@ async def select(sql, args, size=None):
 
 
 # INSERT, UPDATE, DELETE
-def execute(sql, args):
+async def execute(sql, args, autocommit=True):
 	log(sql)
-	with(yield from __pool) as conn:
+	async with __pool.get() as conn:
+		if not autocommit:
+			await conn.begin()
 		try:
-			cur = yield from conn.cursor()
-			yield from cur.execute(sql.replace('?', '%s'), args)
-			affected = cur.rowcount
-			yield from cur.close()
+			async with conn.cursor(aiomysql.DictCursor) as cur:
+				await cur.execute(sql.replace('?', '%s'), args)
+				affected = cur.rowcount
+			if not autocommit:
+				await conn.commint()
 		except BaseException as e:
+			if not autocommit:
+				await conn.rollback()
 			raise
 		return affected
 
@@ -218,11 +222,10 @@ class Model(dict, metaclass=ModelMetaclass):
 			return None
 		return rs[0]['_num_']
 
-	@asyncio.coroutine
-	def save(self):
+	async def save(self):
 		args = list(map(self.getValueOrDefault, self.__fields__))
 		args.append(self.getValueOrDefault(self.__primary_key__))
-		rows = yield from execute(self.__insert__, args)
+		rows = await execute(self.__insert__, args)
 		if rows != 1:
 			logging.warning('failed to insert record: affected rows %s' % rows)
 
