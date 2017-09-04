@@ -5,9 +5,9 @@ import asyncio
 
 async def test(loop):
 	await orm.create_pool(loop=loop, user='www-data', password='www-data', db='awesome')
-	# u = User(name='Test', email='test@example.com', passwd='1234567890',  image='about:blank')
-	u = User.findAll()
-	await u
+	u = User(name='Test1', email='test1@example.com', passwd='1234567890',  image='about:blank')
+	# u = User.findAll()
+	await u.save()
 	print(u)
 
 loop = asyncio.get_event_loop()  # 从asyncio模块中直接获取一个EventLoop的引用
